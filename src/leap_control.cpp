@@ -3,12 +3,12 @@
 #include "std_msgs/String.h"
 #include "sensor_msgs/Joy.h"
 #include "std_msgs/Empty.h"
-#include "leap_motion/leapros.h"
 #include <cmath>
 #include <string>
 #include "visualization_msgs/MarkerArray.h"
 #include "geometry_msgs/PoseStamped.h"
 #include <tf/transform_broadcaster.h>
+#include "leap_control/leapros.h"
 #include <Eigen/Eigen>
 
 ros::Publisher velocityPublisher;
@@ -24,7 +24,7 @@ ros::Publisher marker_pub;
     ypr.y = pitch
     ypr.z = roll
 */
-void leapMotionCallback(const  leap_motion::leapros::ConstPtr& msg)
+void leapMotionCallback(const  leap_control::leapros::ConstPtr& msg)
 {
     geometry_msgs::Twist velocityOut;
     // Changing from Leapmotion coordinates to robot body coordinates : https://developer.leapmotion.com/documentation/csharp/devguide/Leap_Overview.html
@@ -103,11 +103,8 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "leap_control");
     ros::NodeHandle n;
-    velocityPublisher   = n.advertise<geometry_msgs::Twist>("/cmd_vel", 1000);
-    
-    //pub_marker_array    = n.advertise<visualization_msgs::MarkerArray>("hands", 1);
-    marker_pub       = n.advertise<visualization_msgs::Marker>("hands_line", 1);
-    
+    velocityPublisher = n.advertise<geometry_msgs::Twist>("/cmd_vel", 1000);
+    marker_pub        = n.advertise<visualization_msgs::Marker>("hands_links", 1);
     ros::Subscriber sub = n.subscribe("leapmotion/data", 1000, leapMotionCallback);
     ros::Rate loop_rate(50);
     ros::spin();
