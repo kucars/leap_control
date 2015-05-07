@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+
+  <arg name="cmd_vel_topic" value="/mavros/setpoint_velocity/cmd_vel" /> 
+  <arg name="pose_topic"    value="/mavros/vision_pose/pose" /> 
+
+  <node    pkg="leap_control" name="leap_control" type="leap_interface" required="true" clear_params="true" output="screen" ns="/leapmotion">
+    <param name="cmd_vel_topic" value="$(arg cmd_vel_topic)" type="str"/>
+    <param name="pose_topic"    value="$(arg pose_topic)"    type="str"/>
+  </node>
+
+</launch>

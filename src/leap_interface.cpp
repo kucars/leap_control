@@ -6,9 +6,28 @@
 #include "leap_control/leapros.h"
 #include "Leap.h"
 #include <sstream>
+#include <Eigen/Eigen>
+#include <pcl/io/pcd_io.h>
+#include <pcl/common/eigen.h>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/common/centroid.h>
+#include <pcl/PointIndices.h>
+#include <pcl/range_image/range_image.h>
+#include "geometry_msgs/Twist.h"
+#include <tf/transform_broadcaster.h>
 
 using namespace Leap;
 using namespace std;
+
+inline void leap2BodyCoordinate(double x,double y,double z, geometry_msgs::Point &bodyPose)
+{
+    bodyPose.x = -z/1000.0f;
+    bodyPose.y = -x/1000.0f;
+    bodyPose.z =  y/1000.0f;
+}
+
+
 
 class HandsListener : public Listener
 {
@@ -17,7 +36,10 @@ public:
     ros::Publisher handJointMarkersPub;
     ros::Publisher handLinkMarkersPub;
     ros::Publisher handTrackerMarkersPub;
+    ros::Publisher handNormalsMarkersPub;
     ros::Publisher leapInfoPub;
+    ros::Publisher velocityPublisher;
+    ros::Subscriber poseUpdate;
     unsigned int seq;
     virtual void onInit(const Controller&);
     virtual void onConnect(const Controller&);
@@ -31,6 +53,12 @@ public:
     virtual void onServiceDisconnect(const Controller&);
     void createMarkers(std::vector<geometry_msgs::Point>,std::vector<geometry_msgs::Point> );
     void generateVelCmd(geometry_msgs::Point trackedJoints[4]);
+    void generateVelCmdUsingHandPose(Leap::Vector vector);
+    void drawVector(Leap::Vector vector);
+    void poseUpdateCallback(const geometry_msgs::PoseStamped::ConstPtr& msg);
+    double prevAngularVel, prevLinearVel;
+    std::string cmdVelTopic,poseTopic;
+    geometry_msgs::PoseStamped currentPose;
 private:
 };
 
@@ -40,7 +68,20 @@ void HandsListener::onInit(const Controller&)
     handJointMarkersPub   = node.advertise<visualization_msgs::MarkerArray>("hands_joints", 10);
     handLinkMarkersPub    = node.advertise<visualization_msgs::Marker>("hands_links", 10);
     handTrackerMarkersPub = node.advertise<visualization_msgs::Marker>("hands_tracker", 10);
-    leapInfoPub         = node.advertise<leap_control::leapros>("leapmotion/data", 10);
+    handNormalsMarkersPub = node.advertise<visualization_msgs::Marker>("hand_vectors", 10);
+    leapInfoPub           = node.advertise<leap_control::leapros>("/data", 10);
+
+    ros::NodeHandle privateNh("~");
+    privateNh.param<std::string>("cmd_vel_topic", cmdVelTopic,   std::string("/cmd_vel"));
+    privateNh.param<std::string>("pose_topic",    poseTopic, std::string("/pose"));
+
+    velocityPublisher     = node.advertise<geometry_msgs::Twist>(cmdVelTopic, 100);
+    poseUpdate            = node.subscribe(poseTopic, 1, &HandsListener::poseUpdateCallback, this);
+
+    ROS_INFO("cmd_vel:%s pose_topic is:%s socket",cmdVelTopic.c_str(),poseTopic.c_str());
+
+
+    prevAngularVel = prevLinearVel = 0;
 }
 
 
@@ -80,14 +121,23 @@ void HandsListener::onFrame(const Controller& controller)
         leapInfo.normal.x = handNormal.x;
         leapInfo.normal.y = handNormal.y;
         leapInfo.normal.z = handNormal.z;
+        handNormal.pitch(); handNormal.roll();handNormal.yaw();
 
         Leap::Vector palmPose = hand.palmPosition();
+        Leap::Vector palmVel  = hand.palmVelocity();
 
         leapInfo.palmpos.x = palmPose.x;
         leapInfo.palmpos.y = palmPose.y;
         leapInfo.palmpos.z = palmPose.z;
 
+        leapInfo.palmvel.x = palmVel.x;
+        leapInfo.palmvel.y = palmVel.y;
+        leapInfo.palmvel.z = palmVel.z;
+
         Leap::Vector handDirection = hand.direction();
+
+        generateVelCmdUsingHandPose(handDirection);
+        //drawVector(handDirection);
 
         leapInfo.direction.x = handDirection.x;
         leapInfo.direction.y = handDirection.y;
@@ -102,8 +152,6 @@ void HandsListener::onFrame(const Controller& controller)
             leapInfo.hand_id = std::string("left");
         leapInfoPub.publish(leapInfo);
 
-        ROS_INFO("Hand yaw:%f pitch:%f roll:%f",leapInfo.ypr.x,leapInfo.ypr.y,leapInfo.ypr.z);
-
         const FingerList fingers = hand.fingers();
         for (FingerList::const_iterator fl = fingers.begin(); fl != fingers.end(); ++fl)
         {
@@ -112,39 +160,23 @@ void HandsListener::onFrame(const Controller& controller)
             {
                 ROS_INFO("Found Index");
                 Bone bone = finger.bone(Leap::Bone::TYPE_METACARPAL);
-                geometry_msgs::Point point;
-                point.x = -bone.nextJoint().x/1000;
-                point.y =  bone.nextJoint().z/1000;
-                point.z =  bone.nextJoint().y/1000;
-                trackedJoints[0] = point;
+                leap2BodyCoordinate(bone.nextJoint().x,bone.nextJoint().y,bone.nextJoint().z,trackedJoints[0]);
                 numTrackedJoints++;
             }
             if(finger.type() == Leap::Finger::TYPE_PINKY && hand.isRight() && finger.isValid())
             {
                 ROS_INFO("Found Pinky");
                 Bone bone = finger.bone(Leap::Bone::TYPE_METACARPAL);
-                geometry_msgs::Point point;
-                point.x = -bone.nextJoint().x/1000;
-                point.y =  bone.nextJoint().z/1000;
-                point.z =  bone.nextJoint().y/1000;
-                trackedJoints[1] = point;
+                leap2BodyCoordinate(bone.nextJoint().x,bone.nextJoint().y,bone.nextJoint().z,trackedJoints[1]);
                 numTrackedJoints++;
             }
             if(finger.type() == Leap::Finger::TYPE_MIDDLE && hand.isRight() && finger.isValid())
             {
                 ROS_INFO("Found Middle");
                 Bone bone = finger.bone(Leap::Bone::TYPE_METACARPAL);
-                geometry_msgs::Point point;
-                point.x = -bone.prevJoint().x/1000;
-                point.y =  bone.prevJoint().z/1000;
-                point.z =  bone.prevJoint().y/1000;
-                trackedJoints[2] = point;
+                leap2BodyCoordinate(bone.prevJoint().x,bone.prevJoint().y,bone.prevJoint().z,trackedJoints[2]);
                 numTrackedJoints++;
-
-                point.x = -bone.nextJoint().x/1000;
-                point.y =  bone.nextJoint().z/1000;
-                point.z =  bone.nextJoint().y/1000;
-                trackedJoints[3] = point;
+                leap2BodyCoordinate(bone.nextJoint().x,bone.nextJoint().y,bone.nextJoint().z,trackedJoints[3]);
                 numTrackedJoints++;
             }
             for (int b = 0; b < 4; ++b)
@@ -152,13 +184,9 @@ void HandsListener::onFrame(const Controller& controller)
                 Bone::Type boneType = static_cast<Bone::Type>(b);
                 Bone bone = finger.bone(boneType);
                 geometry_msgs::Point point;
-                point.x = -bone.prevJoint().x/1000;
-                point.y =  bone.prevJoint().z/1000;
-                point.z =  bone.prevJoint().y/1000;
+                leap2BodyCoordinate(bone.prevJoint().x,bone.prevJoint().y,bone.prevJoint().z,point);
                 links.push_back(point);
-                point.x = -bone.nextJoint().x/1000;
-                point.y =  bone.nextJoint().z/1000;
-                point.z =  bone.nextJoint().y/1000;
+                leap2BodyCoordinate(bone.nextJoint().x,bone.nextJoint().y,bone.nextJoint().z,point);
                 joints.push_back(point);
                 links.push_back(point);
             }
@@ -242,6 +270,75 @@ void HandsListener::createMarkers(std::vector<geometry_msgs::Point> links,std::v
     handJointMarkersPub.publish(jointsMarkerArrayMsg);
 }
 
+void HandsListener::drawVector(Leap::Vector vector)
+{
+    visualization_msgs::Marker vectorMsg;
+    vectorMsg.header.frame_id = "/leapmotion_optical_frame";
+    vectorMsg.header.stamp    = ros::Time::now();
+    vectorMsg.ns      = "vectors";
+    vectorMsg.id      = 0;
+    vectorMsg.type    = visualization_msgs::Marker::ARROW;
+    vectorMsg.action  = visualization_msgs::Marker::ADD;
+    vectorMsg.scale.x = 0.15;
+    vectorMsg.scale.y = 0.01;
+    vectorMsg.scale.z = 0.01;
+    vectorMsg.color.r = 1.0f;
+    vectorMsg.color.g = 0.0f;
+    vectorMsg.color.b = 1.0f;
+    vectorMsg.color.a = 0.7f;
+
+    vectorMsg.lifetime = ros::Duration(0.1);
+
+    vectorMsg.pose.position.x =  vector.x/1000.0;
+    vectorMsg.pose.position.y =  vector.y/1000.0;
+    vectorMsg.pose.position.z =  vector.z/1000.0;
+
+    tf::Quaternion q;
+    q.setRPY(vector.roll(), vector.pitch(), vector.yaw());
+    ROS_INFO(" Hand roll:%f, pitch:%f , yaw:%f",pcl::rad2deg(vector.roll()),pcl::rad2deg(vector.pitch()),pcl::rad2deg(vector.yaw()));
+    vectorMsg.pose.orientation.x = q.x();
+    vectorMsg.pose.orientation.y = q.y();
+    vectorMsg.pose.orientation.z = q.z();
+    vectorMsg.pose.orientation.w = q.w();
+    handNormalsMarkersPub.publish(vectorMsg);
+}
+
+void HandsListener::generateVelCmdUsingHandPose(Leap::Vector vector)
+{
+    drawVector(vector);
+    tf::Quaternion qt = tf::createQuaternionFromYaw(pcl::deg2rad(-90.0));
+    ROS_INFO("QT x:%f y:%f z:%f w:%f",qt.x(),qt.y(),qt.z(),qt.w());
+
+    double yaw,pitch,roll;
+    tf::Quaternion q(currentPose.pose.orientation.x,currentPose.pose.orientation.y,currentPose.pose.orientation.z,currentPose.pose.orientation.w);
+    tf::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    ROS_INFO("Pose Yaw:%f",pcl::rad2deg(yaw));
+
+    geometry_msgs::TwistStamped velocityOutStamped;
+    geometry_msgs::Twist velocityOut;
+
+    double maxLinVel = 0.1;
+    double maxAngVel = 0.1;
+
+    double vx             = -vector.pitch()*maxLinVel/(M_PI/2.0);
+    double vy             = 0;
+    velocityOut.linear.x  = (vx *cos(yaw)) - (vy * sin(yaw));
+    velocityOut.linear.y  = (vx *sin(yaw)) + (vy * cos(yaw));
+    velocityOut.linear.z  = 0 ;
+    velocityOut.angular.z = vector.yaw()*maxAngVel/(M_PI/2.0);
+
+    velocityOutStamped.twist        = velocityOut ;
+    velocityOutStamped.header.stamp = ros::Time::now() ;
+    ROS_INFO("VELs %f,%f,%f",velocityOut.linear.x,velocityOut.linear.y,velocityOut.angular.z);
+    if(abs(velocityOut.linear.x - prevLinearVel)<0.1 && abs(velocityOut.angular.z-prevAngularVel)<0.2)
+    {
+        velocityPublisher.publish(velocityOut);
+        prevLinearVel  = velocityOut.linear.x;
+        prevAngularVel = velocityOut.angular.z;
+    }
+    velocityPublisher.publish(velocityOut);
+}
+
 void HandsListener::generateVelCmd(geometry_msgs::Point trackedJoints[4])
 {
     visualization_msgs::Marker handsTrackerMarkerMsg;
@@ -264,7 +361,43 @@ void HandsListener::generateVelCmd(geometry_msgs::Point trackedJoints[4])
         else
             handsTrackerMarkerMsg.colors.push_back(color2);
     }
+
+    Eigen::Vector4f v1(trackedJoints[0].x - trackedJoints[1].x,trackedJoints[0].y - trackedJoints[1].y,trackedJoints[0].z - trackedJoints[1].z,0);
+    Eigen::Vector4f v2(trackedJoints[2].x - trackedJoints[3].x,trackedJoints[2].y - trackedJoints[3].y,trackedJoints[2].z - trackedJoints[3].z,0);
+    Eigen::Vector4f vXAxis(5,0,0,0);
+    Eigen::Vector4f vYAxis(0,5,0,0);
+    Eigen::Vector3f v1Dir = v1.head(3), vDir2 = v2.head(3), x = vXAxis.head(3), y = vYAxis.head(3);
+
+    double angleX = pcl::getAngle3D(v1, vXAxis);
+    double angleY = pcl::getAngle3D(v2, vYAxis);
+
+    /* A hacky way to find directionality*/
+    int xDir = v1Dir.cross(x)(1)>=0?1:-1;
+    int yDir = vDir2.cross(y)(0)>=0?-1:1;
+    double xAng = pcl::rad2deg(angleX)*xDir;
+    double yAng = pcl::rad2deg(angleY)*yDir;
+    ROS_INFO("Angle X-Axis:%f Y-Axis:%f Dirx:%d Diry:%d",xAng,yAng,xDir,yDir);
+    double maxLinVel = 0.3;
+    double maxAngVel = 1.0;
+    geometry_msgs::Twist velocityOut;
+    velocityOut.linear.x  =  yAng*maxLinVel/180.0f;
+    velocityOut.angular.z = -xAng*maxAngVel/180.0f;
+    //velocityOut.linear.z = 0;
+
+    ROS_INFO("VELs %f,%f,%f",velocityOut.linear.x,velocityOut.linear.y,velocityOut.linear.z);
+
+    if(abs(velocityOut.linear.x - prevLinearVel)<0.1 && abs(velocityOut.angular.z-prevAngularVel)<0.2)
+    {
+        velocityPublisher.publish(velocityOut);
+        prevLinearVel  = velocityOut.linear.x;
+        prevAngularVel = velocityOut.angular.z;
+    }
     handTrackerMarkersPub.publish(handsTrackerMarkerMsg);
+}
+
+void HandsListener::poseUpdateCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
+{
+    currentPose = *msg;
 }
 
 int main(int argc, char** argv) 
