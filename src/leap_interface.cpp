@@ -26,8 +26,7 @@ inline void leap2BodyCoordinate(double x,double y,double z, geometry_msgs::Point
     bodyPose.y = -x/1000.0f;
     bodyPose.z =  y/1000.0f;
 }
-
-
+ros::Time  lastTimeUpdate;
 
 class HandsListener : public Listener
 {
@@ -75,10 +74,10 @@ void HandsListener::onInit(const Controller&)
     privateNh.param<std::string>("cmd_vel_topic", cmdVelTopic,   std::string("/cmd_vel"));
     privateNh.param<std::string>("pose_topic",    poseTopic, std::string("/pose"));
 
-    velocityPublisher     = node.advertise<geometry_msgs::Twist>(cmdVelTopic, 100);
+    velocityPublisher     = node.advertise<geometry_msgs::TwistStamped>(cmdVelTopic, 100);
     poseUpdate            = node.subscribe(poseTopic, 1, &HandsListener::poseUpdateCallback, this);
 
-    ROS_INFO("cmd_vel:%s pose_topic is:%s socket",cmdVelTopic.c_str(),poseTopic.c_str());
+    ROS_INFO("cmd_vel:%s pose_topic is:%s",cmdVelTopic.c_str(),poseTopic.c_str());
 
 
     prevAngularVel = prevLinearVel = 0;
@@ -136,7 +135,7 @@ void HandsListener::onFrame(const Controller& controller)
 
         Leap::Vector handDirection = hand.direction();
 
-        generateVelCmdUsingHandPose(handDirection);
+        //generateVelCmdUsingHandPose(handDirection);
         //drawVector(handDirection);
 
         leapInfo.direction.x = handDirection.x;
@@ -158,21 +157,21 @@ void HandsListener::onFrame(const Controller& controller)
             const Finger finger = *fl;
             if(finger.type() == Leap::Finger::TYPE_INDEX && hand.isRight() && finger.isValid())
             {
-                ROS_INFO("Found Index");
+                //ROS_INFO("Found Index");
                 Bone bone = finger.bone(Leap::Bone::TYPE_METACARPAL);
                 leap2BodyCoordinate(bone.nextJoint().x,bone.nextJoint().y,bone.nextJoint().z,trackedJoints[0]);
                 numTrackedJoints++;
             }
             if(finger.type() == Leap::Finger::TYPE_PINKY && hand.isRight() && finger.isValid())
             {
-                ROS_INFO("Found Pinky");
+                //ROS_INFO("Found Pinky");
                 Bone bone = finger.bone(Leap::Bone::TYPE_METACARPAL);
                 leap2BodyCoordinate(bone.nextJoint().x,bone.nextJoint().y,bone.nextJoint().z,trackedJoints[1]);
                 numTrackedJoints++;
             }
             if(finger.type() == Leap::Finger::TYPE_MIDDLE && hand.isRight() && finger.isValid())
             {
-                ROS_INFO("Found Middle");
+                //ROS_INFO("Found Middle");
                 Bone bone = finger.bone(Leap::Bone::TYPE_METACARPAL);
                 leap2BodyCoordinate(bone.prevJoint().x,bone.prevJoint().y,bone.prevJoint().z,trackedJoints[2]);
                 numTrackedJoints++;
@@ -332,11 +331,11 @@ void HandsListener::generateVelCmdUsingHandPose(Leap::Vector vector)
     ROS_INFO("VELs %f,%f,%f",velocityOut.linear.x,velocityOut.linear.y,velocityOut.angular.z);
     if(abs(velocityOut.linear.x - prevLinearVel)<0.1 && abs(velocityOut.angular.z-prevAngularVel)<0.2)
     {
-        velocityPublisher.publish(velocityOut);
+        velocityPublisher.publish(velocityOutStamped);
         prevLinearVel  = velocityOut.linear.x;
         prevAngularVel = velocityOut.angular.z;
     }
-    velocityPublisher.publish(velocityOut);
+    velocityPublisher.publish(velocityOutStamped);
 }
 
 void HandsListener::generateVelCmd(geometry_msgs::Point trackedJoints[4])
@@ -377,22 +376,29 @@ void HandsListener::generateVelCmd(geometry_msgs::Point trackedJoints[4])
     double xAng = pcl::rad2deg(angleX)*xDir;
     double yAng = pcl::rad2deg(angleY)*yDir;
     ROS_INFO("Angle X-Axis:%f Y-Axis:%f Dirx:%d Diry:%d",xAng,yAng,xDir,yDir);
-    double maxLinVel = 0.3;
-    double maxAngVel = 1.0;
+    double maxLinVel = 5.0;
+    double maxAngVel = 5.0;
     geometry_msgs::Twist velocityOut;
+    geometry_msgs::TwistStamped velocityOutStamped;
     velocityOut.linear.x  =  yAng*maxLinVel/180.0f;
-    velocityOut.angular.z = -xAng*maxAngVel/180.0f;
+    velocityOut.linear.y  =  xAng*maxLinVel/180.0f;
+    //velocityOut.angular.z = -xAng*maxAngVel/180.0f;
     //velocityOut.linear.z = 0;
 
-    ROS_INFO("VELs %f,%f,%f",velocityOut.linear.x,velocityOut.linear.y,velocityOut.linear.z);
-
+    ROS_INFO("VELs %f,%f,%f\n\n",velocityOut.linear.x,velocityOut.linear.y,velocityOut.angular.z);
+    velocityOutStamped.twist        = velocityOut ;
+    velocityOutStamped.header.stamp = ros::Time::now() ;
+    /*
     if(abs(velocityOut.linear.x - prevLinearVel)<0.1 && abs(velocityOut.angular.z-prevAngularVel)<0.2)
     {
-        velocityPublisher.publish(velocityOut);
+        velocityPublisher.publish(velocityOutStamped);
         prevLinearVel  = velocityOut.linear.x;
         prevAngularVel = velocityOut.angular.z;
     }
+    */
+    velocityPublisher.publish(velocityOutStamped);
     handTrackerMarkersPub.publish(handsTrackerMarkerMsg);
+    lastTimeUpdate = ros::Time::now();
 }
 
 void HandsListener::poseUpdateCallback(const geometry_msgs::PoseStamped::ConstPtr& msg)
@@ -408,7 +414,29 @@ int main(int argc, char** argv)
     Controller controller;
     controller.addListener(listener);
     controller.setPolicyFlags(static_cast<Leap::Controller::PolicyFlag> (Leap::Controller::POLICY_IMAGES));
-    ros::spin();
+    ros::Rate loop_rate(10);
+    geometry_msgs::TwistStamped velocityOutStamped;
+    ros::Time  currentTime = ros::Time::now();
+    while (ros::ok())
+    {
+        currentTime = ros::Time::now();
+        ros::Duration timeDiff = (currentTime - lastTimeUpdate);
+        //std::cout<<"\nTime diff:"<<timeDiff.toSec();
+        if(timeDiff.toSec()>0.1)
+        {
+            velocityOutStamped.twist.linear.x = 0 ;
+            velocityOutStamped.twist.linear.y = 0 ;
+            velocityOutStamped.twist.linear.z = 0 ;
+            velocityOutStamped.twist.angular.x = 0 ;
+            velocityOutStamped.twist.angular.y = 0 ;
+            velocityOutStamped.twist.angular.z = 0 ;
+            velocityOutStamped.header.stamp = ros::Time::now();
+            listener.velocityPublisher.publish(velocityOutStamped);
+        }
+        
+        ros::spinOnce();
+        loop_rate.sleep();
+    }
     //Done: stop listening
     controller.removeListener(listener);
     return 0;

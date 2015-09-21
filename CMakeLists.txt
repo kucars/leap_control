@@ -23,11 +23,9 @@ find_package(Eigen REQUIRED)
 find_package(PCL REQUIRED)
 
 include_directories(
-  include
   ${catkin_INCLUDE_DIRS}
   ${Eigen_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
-  "/home/kuri/Downloads/LeapDeveloperKit_2.2.4+26750_linux/LeapSDK/include/"
   if( EXISTS $ENV{LEAP_SDK} $ENV{LEAP_SDK}/include)
 )
 
@@ -45,7 +43,6 @@ generate_messages(
 )
 
 catkin_package(
-  INCLUDE_DIRS include
   CATKIN_DEPENDS geometry_msgs sensor_msgs std_msgs roscpp message_runtime rospy pcl_conversions pcl_ros
   DEPENDS system_lib
 )
@@ -58,6 +55,5 @@ target_link_libraries(leap_control ${catkin_LIBRARIES})
 if(EXISTS $ENV{LEAP_SDK})
   add_executable(leap_interface src/leap_interface.cpp)
   target_link_libraries(leap_interface ${PCL_LIBRARY_DIRS} ${catkin_LIBRARIES} $ENV{LEAP_SDK}/lib/x64/libLeap.so  )
-  #target_include_directories(leap_interface PUBLIC $ENV{LEAP_SDK}/include)
 endif()
 

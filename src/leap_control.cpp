@@ -26,21 +26,22 @@ ros::Publisher marker_pub;
 */
 void leapMotionCallback(const  leap_control::leapros::ConstPtr& msg)
 {
-    geometry_msgs::Twist velocityOut;
+    geometry_msgs::TwistStamped velocityOut;
     // Changing from Leapmotion coordinates to robot body coordinates : https://developer.leapmotion.com/documentation/csharp/devguide/Leap_Overview.html
     double x =  -msg->palmpos.x;
     double y =   msg->palmpos.z;
     double z =   msg->palmpos.y;
-    
+
     /*
     double x =  -msg->palmpos.z;
     double y =   msg->palmpos.x;
     double z =   msg->palmpos.y;
     */
     // Assume that the working area is 500 mm, this will map to a speed of 1m/sec
-    velocityOut.linear.x = x/500.0f;
-    velocityOut.linear.y = y/500.0f;
-    velocityOut.linear.z = z/500.0f;
+    velocityOut.header.stamp = ros::Time::now();
+    velocityOut.twist.linear.x = x/500.0f;
+    velocityOut.twist.linear.y = y/500.0f;
+    velocityOut.twist.linear.z = z/500.0f;
     /*
     velocityOut.linear.x = ((std::abs (msg->ypr.y)) - 90) / 30;
     if (velocityOut.linear.x > 1)
@@ -57,7 +58,7 @@ void leapMotionCallback(const  leap_control::leapros::ConstPtr& msg)
     else if(msg->palmpos.z > 24000)
         velocityOut.linear.z = .75;
     */
-    ROS_INFO("TEST %f,%f,%f",velocityOut.linear.x,velocityOut.linear.y,velocityOut.linear.z);
+    ROS_INFO("TEST %f,%f,%f",velocityOut.twist.linear.x,velocityOut.twist.linear.y,velocityOut.twist.linear.z);
     velocityPublisher.publish(velocityOut);
     
     visualization_msgs::Marker joint_msg;
@@ -103,7 +104,7 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "leap_control");
     ros::NodeHandle n;
-    velocityPublisher = n.advertise<geometry_msgs::Twist>("/cmd_vel", 1000);
+    velocityPublisher = n.advertise<geometry_msgs::TwistStamped>("/cmd_vel", 1000);
     marker_pub        = n.advertise<visualization_msgs::Marker>("hands_links", 1);
     ros::Subscriber sub = n.subscribe("leapmotion/data", 1000, leapMotionCallback);
     ros::Rate loop_rate(50);
